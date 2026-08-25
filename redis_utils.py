@@ -3,7 +3,8 @@ import os
 import asyncio
 import logging
 
-DATA_DIR = "data"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
 STORE_FILE = os.path.join(DATA_DIR, "hyacine_store.json")
 
 _MEMORY_STORE = {}
@@ -35,63 +36,89 @@ _load_store_from_disk()
 
 async def rget(bot, key: str, default=None):
     """Fetch value from persistent store."""
-    val = _MEMORY_STORE.get(key, default)
+    skey = str(key)
+    val = _MEMORY_STORE.get(skey, default)
     if val is None:
         return default
-    return str(val) if not isinstance(val, str) else val
+    if isinstance(val, (dict, list)):
+        return json.dumps(val)
+    return str(val)
 
 async def rset(bot, key, value):
     """Set value in persistent store and save to disk."""
-    if isinstance(value, (dict, list)):
-        value = json.dumps(value)
-    _MEMORY_STORE[key] = str(value) if not isinstance(value, str) else value
+    skey = str(key)
+    _MEMORY_STORE[skey] = value
     _save_store_to_disk()
 
 async def rget_json(bot, key: str):
-    """Fetch and parse JSON from persistent store."""
-    data = await rget(bot, key)
-    if not data:
+    """Fetch and parse JSON safely from persistent store."""
+    skey = str(key)
+    data = _MEMORY_STORE.get(skey)
+    if data is None:
         return None
+    if isinstance(data, (dict, list)):
+        return data
     try:
-        return json.loads(data)
-    except:
+        parsed = json.loads(data)
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                pass
+        return parsed
+    except Exception:
         return None
 
 async def rset_json(bot, key: str, value):
     """Store JSON value in persistent store and save to disk."""
-    await rset(bot, key, json.dumps(value))
+    skey = str(key)
+    if isinstance(value, (dict, list)):
+        _MEMORY_STORE[skey] = value
+    else:
+        try:
+            _MEMORY_STORE[skey] = json.loads(value)
+        except Exception:
+            _MEMORY_STORE[skey] = value
+    _save_store_to_disk()
 
 async def rappend(bot, key: str, value: str):
     """Append a value to a list in persistent store and save to disk."""
-    current = _MEMORY_STORE.get(key)
+    skey = str(key)
+    current = _MEMORY_STORE.get(skey)
     if current is None:
         lst = []
+    elif isinstance(current, list):
+        lst = current
     else:
         try:
             lst = json.loads(current) if isinstance(current, str) else current
             if not isinstance(lst, list): lst = [current]
-        except:
+        except Exception:
             lst = [current]
     lst.append(value)
-    _MEMORY_STORE[key] = json.dumps(lst)
+    _MEMORY_STORE[skey] = lst
     _save_store_to_disk()
 
 async def rrange(bot, key: str, start: int = 0, stop: int = -1):
     """Fetch range from a list in persistent store."""
-    current = _MEMORY_STORE.get(key)
+    skey = str(key)
+    current = _MEMORY_STORE.get(skey)
     if not current:
         return []
-    try:
-        lst = json.loads(current) if isinstance(current, str) else current
-        if isinstance(lst, list):
-            if stop == -1:
-                return [str(x) for x in lst[start:]]
-            return [str(x) for x in lst[start:stop+1]]
-    except:
-        pass
+    lst = current if isinstance(current, list) else []
+    if not lst and isinstance(current, str):
+        try:
+            lst = json.loads(current)
+        except Exception:
+            lst = []
+    if isinstance(lst, list):
+        if stop == -1:
+            return [str(x) for x in lst[start:]]
+        return [str(x) for x in lst[start:stop+1]]
     return []
 
 async def rdelete(bot, key: str):
     """Delete key from persistent store and update disk."""
-    _MEMORY_STORE.pop(key, None)
+    skey = str(key)
+    _MEMORY_STORE.pop(skey, None)
     _save_store_to_disk()

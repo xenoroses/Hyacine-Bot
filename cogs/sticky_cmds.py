@@ -7,13 +7,34 @@ import discord
 from redis_utils import rget_json, rset_json, rdelete
 from typing import Union, Optional
 
+async def safe_respond(interaction: discord.Interaction, embed: Optional[discord.Embed] = None, content: Optional[str] = None, ephemeral: bool = True):
+    """Fail-safe interaction response handler that guarantees exactly one message response."""
+    try:
+        if not interaction.response.is_done():
+            if embed and content:
+                await interaction.response.send_message(content=content, embed=embed, ephemeral=ephemeral)
+            elif embed:
+                await interaction.response.send_message(embed=embed, ephemeral=ephemeral)
+            else:
+                await interaction.response.send_message(content=content, ephemeral=ephemeral)
+        else:
+            if embed and content:
+                await interaction.followup.send(content=content, embed=embed, ephemeral=ephemeral)
+            elif embed:
+                await interaction.followup.send(embed=embed, ephemeral=ephemeral)
+            else:
+                await interaction.followup.send(content=content, ephemeral=ephemeral)
+    except Exception:
+        pass
+
+
 class HyacineStickyModal(discord.ui.Modal, title="Set Sticky Notice"):
     def __init__(self, target_channel: discord.TextChannel):
         super().__init__()
         self.target_channel = target_channel
 
         self.message_input = discord.ui.TextInput(
-            label="Sticky Message (Supports # Headers & Markdown)",
+            label="Sticky Message Content",
             style=discord.TextStyle.paragraph,
             placeholder="Type your multiline sticky message here...\nUse # Title, ## Header, **bold**, or > quotes.",
             required=True,
@@ -22,7 +43,7 @@ class HyacineStickyModal(discord.ui.Modal, title="Set Sticky Notice"):
         self.add_item(self.message_input)
 
         self.embed_input = discord.ui.TextInput(
-            label="Format as Rich Embed? (yes / no)",
+            label="Format as Rich Embed? (yes/no)",
             style=discord.TextStyle.short,
             placeholder="Type 'yes' to send inside a sleek embed, or 'no' for plain text.",
             required=False,
@@ -32,28 +53,39 @@ class HyacineStickyModal(discord.ui.Modal, title="Set Sticky Notice"):
         self.add_item(self.embed_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
         message_text = self.message_input.value.strip()
         as_embed = self.embed_input.value.strip().lower() in ("yes", "y", "true", "1")
-
         key = f"sticky:{self.target_channel.id}"
+
+        # Immediately post the initial sticky message into the target channel
+        sent_msg_id = None
+        try:
+            if as_embed:
+                embed_sticky = discord.Embed(description=message_text, color=0xFF69B4)
+                new_msg = await self.target_channel.send(embed=embed_sticky)
+            else:
+                new_msg = await self.target_channel.send(message_text)
+            sent_msg_id = new_msg.id
+        except Exception:
+            pass
+
         await rset_json(interaction.client, key, {
             "message": message_text,
             "is_embed": as_embed,
-            "last_id": None
+            "last_id": sent_msg_id
         })
 
         format_type = "Rich Embed" if as_embed else "Plain Text / Markdown"
-        embed = discord.Embed(
+        confirm_embed = discord.Embed(
             title="📌 Sticky Message Configured",
             description=(
-                f"Sticky notice successfully set for {self.target_channel.mention}!\n\n"
+                f"Sticky notice successfully posted and active in {self.target_channel.mention}!\n\n"
                 f"• **Format:** `{format_type}`\n"
                 f"• **Content Preview:**\n>>> {message_text[:200]}" + ("..." if len(message_text) > 200 else "")
             ),
             color=0xFF69B4
         )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await safe_respond(interaction, embed=confirm_embed, ephemeral=True)
 
 
 class StickyCommands(commands.Cog):
@@ -87,6 +119,42 @@ class StickyCommands(commands.Cog):
             return await channel.send(embed=embed)
         return await channel.send(sticky_text)
 
+    async def _purge_sticky_data(self, channel: discord.TextChannel) -> bool:
+        """Purge sticky from store AND delete old message from channel history."""
+        key = f"sticky:{channel.id}"
+        data = await rget_json(self.bot, key)
+        deleted = False
+
+        if data:
+            deleted = True
+            last_id = data.get("last_id")
+            await rdelete(self.bot, key)
+            if last_id:
+                try:
+                    old_msg = await channel.fetch_message(last_id)
+                    await old_msg.delete()
+                except: pass
+        else:
+            await rdelete(self.bot, key)
+
+        # Fallback sweep: remove any orphaned bot messages in channel history
+        try:
+            async for msg in channel.history(limit=15):
+                if msg.author.id == self.bot.user.id:
+                    # Ignore command confirmations or system embeds
+                    if msg.embeds and any(kw in (msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Protocol", "Audit"]):
+                        continue
+                    if "protocol engaged" in msg.content.lower():
+                        continue
+                    try:
+                        await msg.delete()
+                        deleted = True
+                        break
+                    except: pass
+        except: pass
+
+        return deleted
+
     # --- Slash Commands Group ---
 
     @sticky_group.command(name="modal", description="Open multiline paragraph modal popup to set sticky notice with newlines & headers.")
@@ -109,10 +177,17 @@ class StickyCommands(commands.Cog):
         key = f"sticky:{target_ch.id}"
 
         async with self.channel_locks[target_ch.id]:
+            # Post initial message
+            sent_msg_id = None
+            try:
+                msg = await self._send_sticky_msg(target_ch, message, as_embed)
+                sent_msg_id = msg.id
+            except: pass
+
             await rset_json(self.bot, key, {
                 "message": message,
                 "is_embed": as_embed,
-                "last_id": None
+                "last_id": sent_msg_id
             })
 
         format_type = "Rich Embed" if as_embed else "Plain Text / Markdown"
@@ -125,37 +200,22 @@ class StickyCommands(commands.Cog):
             ),
             color=0xFF69B4
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await safe_respond(interaction, embed=embed, ephemeral=True)
 
     @sticky_group.command(name="remove", description="Remove sticky message from a channel.")
     @app_commands.checks.has_permissions(manage_channels=True)
     async def sticky_remove_slash(self, interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
         target_ch = channel or interaction.channel
-        key = f"sticky:{target_ch.id}"
 
         async with self.channel_locks[target_ch.id]:
-            data = await rget_json(self.bot, key)
-            if not data:
-                return await interaction.response.send_message(
-                    f"⚠️ No active sticky message found in {target_ch.mention}.",
-                    ephemeral=True
-                )
+            removed = await self._purge_sticky_data(target_ch)
 
-            last_id = data.get("last_id")
-            await rdelete(self.bot, key)
+        if removed:
+            await safe_respond(interaction, content=f"🗑️ **Sticky message removed from {target_ch.mention}.**", ephemeral=True)
+        else:
+            await safe_respond(interaction, content=f"⚠️ No active sticky message found in {target_ch.mention}.", ephemeral=True)
 
-            if last_id:
-                try:
-                    old_msg = await target_ch.fetch_message(last_id)
-                    await old_msg.delete()
-                except: pass
-
-        await interaction.response.send_message(
-            f"🗑️ **Sticky message removed from {target_ch.mention}.**",
-            ephemeral=True
-        )
-
-    # --- Prefix Commands Fallback (!sticky / ,sticky) ---
+    # --- Prefix Commands Fallback (!sticky / ,sticky / hya unsticky) ---
 
     @commands.command(name="sticky")
     async def sticky_prefix(self, ctx: commands.Context, *, message: str):
@@ -178,10 +238,16 @@ class StickyCommands(commands.Cog):
 
         key = f"sticky:{ctx.channel.id}"
         async with self.channel_locks[ctx.channel.id]:
+            sent_msg_id = None
+            try:
+                msg = await self._send_sticky_msg(ctx.channel, clean_msg, is_embed)
+                sent_msg_id = msg.id
+            except: pass
+
             await rset_json(self.bot, key, {
                 "message": clean_msg,
                 "is_embed": is_embed,
-                "last_id": None
+                "last_id": sent_msg_id
             })
 
         format_str = " (Rich Embed)" if is_embed else ""
@@ -189,26 +255,17 @@ class StickyCommands(commands.Cog):
 
     @commands.command(name="unsticky")
     async def unsticky_prefix(self, ctx: commands.Context):
-        """Prefix command fallback (!unsticky / ,unsticky)."""
+        """Prefix command fallback (!unsticky / ,unsticky / hya unsticky)."""
         if not ctx.author.guild_permissions.manage_channels and not ctx.author.guild_permissions.administrator:
             return await ctx.send("❌ You need **Manage Channels** or **Administrator** permission.")
 
-        key = f"sticky:{ctx.channel.id}"
         async with self.channel_locks[ctx.channel.id]:
-            data = await rget_json(self.bot, key)
-            if not data:
-                return await ctx.send("⚠️ No active sticky message found in this channel.")
+            removed = await self._purge_sticky_data(ctx.channel)
 
-            last_id = data.get("last_id")
-            await rdelete(self.bot, key)
-
-            if last_id:
-                try:
-                    old_msg = await ctx.channel.fetch_message(last_id)
-                    await old_msg.delete()
-                except: pass
-
-        await ctx.send("⌬ Sticky message removed from this channel.")
+        if removed:
+            await ctx.send("⌬ Sticky message removed from this channel.")
+        else:
+            await ctx.send("⚠️ No active sticky message found in this channel.")
 
     # --- Event Listener ---
 

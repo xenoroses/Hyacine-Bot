@@ -39,7 +39,7 @@ class ObservabilityEngine(commands.Cog):
         except:
             pass
 
-    @commands.hybrid_command(name="health", description="System heartbeat check.")
+    @commands.hybrid_command(name="health", aliases=["ping"], description="System heartbeat check.")
     async def health(self, ctx: commands.Context):
         await ctx.defer()
         ping = round(self.bot.latency * 1000)
