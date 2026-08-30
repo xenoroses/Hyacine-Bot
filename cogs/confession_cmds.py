@@ -98,12 +98,11 @@ class ConfessionEngine(commands.Cog):
     async def _get_guild_config(self, guild_id: int) -> Optional[dict]:
         return await rget_json(self.bot, f"confession:config:{guild_id}")
 
-    async def _set_guild_config(self, guild_id: int, channel_id: Optional[int] = None, log_channel_id: Optional[int] = None, count: Optional[int] = None) -> dict:
+    async def _set_guild_config(self, guild_id: int, channel_id: Optional[int] = None, log_channel_id: Optional[int] = None) -> dict:
         key = f"confession:config:{guild_id}"
-        current = await self._get_guild_config(guild_id) or {"channel_id": None, "log_channel_id": None, "count": 0}
+        current = await self._get_guild_config(guild_id) or {"channel_id": None, "log_channel_id": None}
         if channel_id is not None: current["channel_id"] = channel_id
         if log_channel_id is not None: current["log_channel_id"] = log_channel_id
-        if count is not None: current["count"] = count
         await rset_json(self.bot, key, current)
         return current
 
@@ -128,23 +127,9 @@ class ConfessionEngine(commands.Cog):
                 except: pass
             return
 
-        new_count = config.get("count", 0) + 1
-        await self._set_guild_config(guild.id, count=new_count)
-
-        # Store confession log for audit/tracing
-        confession_data = {
-            "confession_id": new_count,
-            "guild_id": guild.id,
-            "user_id": user.id,
-            "user_tag": str(user),
-            "content": content,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
-        await rset_json(self.bot, f"confession:log:{guild.id}:{new_count}", confession_data)
-
-        # 1. Post Anonymous Confession to Public Channel
+        # 1. Post Anonymous Confession to Public Channel (No Counter / ID)
         public_embed = discord.Embed(
-            title=f"Anonymous Confession #{new_count}",
+            title="💖 Anonymous Confession",
             description=content,
             color=0xFF69B4
         )
@@ -163,8 +148,8 @@ class ConfessionEngine(commands.Cog):
             log_ch = guild.get_channel(log_ch_id)
             if log_ch:
                 admin_embed = discord.Embed(
-                    title=f"🕵️ Confession Audit Log #{new_count}",
-                    description=f"**Confession ID:** `{new_count}`\n\n**Content:**\n>>> {content}",
+                    title="🕵️ Anonymous Confession Log",
+                    description=f"**Content:**\n>>> {content}",
                     color=0xE74C3C,
                     timestamp=datetime.now(timezone.utc)
                 )
@@ -174,7 +159,7 @@ class ConfessionEngine(commands.Cog):
                 except: pass
 
         # Respond ephemerally
-        success_msg = f"✨ Your anonymous confession (**#{new_count}**) has been submitted successfully."
+        success_msg = "✨ Your anonymous confession has been submitted successfully."
         if interaction:
             if interaction.response.is_done():
                 await interaction.followup.send(success_msg, ephemeral=True)
@@ -219,54 +204,16 @@ class ConfessionEngine(commands.Cog):
         except Exception as e:
             await interaction.response.send_message(f"❌ Failed posting panel to {target_ch.mention}: {e}", ephemeral=True)
 
-    @confess.command(name="trace", description="[Admin Only] Trace the real author of a specific confession ID.")
-    @app_commands.checks.has_permissions(manage_messages=True)
-    async def confess_trace(self, interaction: discord.Interaction, confession_id: int):
-        data = await rget_json(self.bot, f"confession:log:{interaction.guild.id}:{confession_id}")
-        if not data:
-            return await interaction.response.send_message(f"❌ No record found for Confession ID `{confession_id}`.", ephemeral=True)
-
-        user_id = data.get("user_id")
-        user = interaction.client.get_user(user_id) or await interaction.client.fetch_user(user_id)
-        user_str = f"{user.mention} (`{user}` | `ID: {user_id}`)" if user else f"`ID: {user_id}`"
-
-        embed = discord.Embed(
-            title=f"🔎 Confession Trace #{confession_id}",
-            description=f"**Author Identity:** {user_str}\n\n**Content:**\n>>> {data.get('content')}",
-            color=0xE74C3C
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @confess.command(name="reset", description="[Admin Only] Reset or set the anonymous confession counter.")
-    @app_commands.checks.has_permissions(manage_channels=True)
-    async def confess_reset(self, interaction: discord.Interaction, count: int = 0):
-        if count < 0:
-            return await interaction.response.send_message("❌ Confession count cannot be negative.", ephemeral=True)
-
-        await self._set_guild_config(guild_id=interaction.guild.id, count=count)
-        embed = discord.Embed(
-            title="Confession Counter Reset",
-            description=f"✨ Anonymous confession counter has been reset to **#{count}**.",
-            color=0xFF69B4
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     # --- Prefix Commands Fallback (!confess / ,confess) ---
     @commands.command(name="confess")
     async def confess_prefix(self, ctx: commands.Context, *, message: Optional[str] = None):
-        """Prefix command fallback (!confess <message> / !confess setup #channel / !confess panel / !confess trace <id> / !confess reset [count])."""
+        """Prefix command fallback (!confess <message> / !confess setup #channel / !confess panel)."""
         if not message:
             return await ctx.send("⚠️ Usage: `!confess <your confession>` or `/confess send`.")
 
         clean_text = message.strip()
         args = clean_text.split()
         sub = args[0].lower()
-
-        if sub == "reset" and (ctx.author.guild_permissions.manage_channels or ctx.author.guild_permissions.administrator):
-            new_val = 0
-            if len(args) > 1 and args[1].isdigit(): new_val = int(args[1])
-            await self._set_guild_config(ctx.guild.id, count=new_val)
-            return await ctx.send(f"✨ Confession counter reset to **#{new_val}**.")
 
         if sub == "setup" and (ctx.author.guild_permissions.manage_channels or ctx.author.guild_permissions.administrator):
             if len(ctx.message.channel_mentions) > 0:
@@ -289,17 +236,6 @@ class ConfessionEngine(commands.Cog):
             try: await ctx.message.delete()
             except: pass
             return
-
-        if sub == "trace" and (ctx.author.guild_permissions.manage_messages or ctx.author.guild_permissions.administrator):
-            if len(args) > 1 and args[1].isdigit():
-                cid = int(args[1])
-                data = await rget_json(self.bot, f"confession:log:{ctx.guild.id}:{cid}")
-                if data:
-                    uid = data.get("user_id")
-                    member = ctx.guild.get_member(uid)
-                    ustr = f"{member.mention} ({member.name})" if member else f"`User ID: {uid}`"
-                    return await ctx.send(f"🕵️ **Audit Trace #{cid}**: Author {ustr} | Content: \"{data.get('content')}\"")
-                return await ctx.send(f"⚠️ Confession #{cid} not found.")
 
         # Delete prefix message to preserve anonymity
         try: await ctx.message.delete()
