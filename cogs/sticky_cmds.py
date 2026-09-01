@@ -298,6 +298,17 @@ class StickyCommands(commands.Cog):
 
             if not sticky_text: return
 
+            # Re-check inside lock to eliminate race conditions
+            if current_last_id and message.channel.last_message_id == current_last_id:
+                return
+
+            # Extra safety check: inspect the most recent message in channel history
+            try:
+                async for last_msg in message.channel.history(limit=1):
+                    if last_msg.id == current_last_id or last_msg.author.id == self.bot.user.id:
+                        return
+            except: pass
+
             if current_last_id:
                 try:
                     old_msg = await message.channel.fetch_message(current_last_id)
