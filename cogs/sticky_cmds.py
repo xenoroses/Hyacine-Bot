@@ -251,7 +251,10 @@ class StickyCommands(commands.Cog):
             })
 
         format_str = " (Rich Embed)" if is_embed else ""
-        await ctx.send(f"✧ Sticky message protocol engaged{format_str}.")
+        try:
+            await ctx.message.delete()
+        except: pass
+        await ctx.send(f"✧ Sticky message protocol engaged{format_str}.", delete_after=4.0)
 
     @commands.command(name="unsticky")
     async def unsticky_prefix(self, ctx: commands.Context):
@@ -286,7 +289,7 @@ class StickyCommands(commands.Cog):
         last_id = data.get("last_id")
 
         if not sticky_text: return
-        if message.channel.last_message_id == last_id: return
+        if last_id and message.channel.last_message_id == int(last_id): return
 
         async with self.channel_locks[message.channel.id]:
             current_data = await rget_json(self.bot, key)
@@ -299,21 +302,19 @@ class StickyCommands(commands.Cog):
             if not sticky_text: return
 
             # Re-check inside lock to eliminate race conditions
-            if current_last_id and message.channel.last_message_id == current_last_id:
+            if current_last_id and message.channel.last_message_id == int(current_last_id):
                 return
 
-            # Extra safety check: inspect the most recent message in channel history
+            # Purge any existing bot sticky messages in recent channel history to guarantee 0 duplicates
             try:
-                async for last_msg in message.channel.history(limit=1):
-                    if last_msg.id == current_last_id or last_msg.author.id == self.bot.user.id:
-                        return
+                async for past_msg in message.channel.history(limit=15):
+                    if past_msg.author.id == self.bot.user.id and past_msg.id != message.id:
+                        if past_msg.embeds and any(kw in (past_msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Portal"]):
+                            continue
+                        try:
+                            await past_msg.delete()
+                        except: pass
             except: pass
-
-            if current_last_id:
-                try:
-                    old_msg = await message.channel.fetch_message(current_last_id)
-                    await old_msg.delete()
-                except: pass
 
             try:
                 new_msg = await self._send_sticky_msg(message.channel, sticky_text, is_embed)
