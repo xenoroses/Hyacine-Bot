@@ -288,9 +288,7 @@ class StickyCommands(commands.Cog):
             removed = await self._purge_sticky_data(ctx.channel)
 
         if removed:
-            await ctx.send("⌬ Sticky message removed from this channel.")
-        else:
-            await ctx.send("⚠️ No active sticky message found in this channel.")
+            await ctx.send("⌬ Sticky message removed from this channel.", delete_after=4.0)
 
     # --- Event Listener ---
 

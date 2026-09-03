@@ -82,8 +82,12 @@ async def get_server_prefixes(bot, message):
     if not message.guild:
         return commands.when_mentioned_or(*default_p)(bot, message)
     try:
-        prefixes = await rget_json(bot, f"prefixes:{message.guild.id}")
+        prefixes = await rget_json(bot, f"hyacine:prefixes:{message.guild.id}")
+        if not prefixes:
+            prefixes = await rget_json(bot, f"prefixes:{message.guild.id}")
         if isinstance(prefixes, list) and prefixes:
+            # Filter out 'nym' so Hyacine never responds to Nym commands
+            prefixes = [p for p in prefixes if p.strip().lower() != "nym"]
             expanded = []
             for p in prefixes + default_p:
                 if not p.endswith(" ") and p.isalnum():
