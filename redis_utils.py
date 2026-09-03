@@ -194,6 +194,6 @@ async def rrange(bot, key: str, start: int = 0, stop: int = -1):
 async def rdelete(bot, key: str):
     """Delete key from RAM, local disk, and Upstash Cloud Redis asynchronously."""
     skey = str(key)
-    _MEMORY_STORE.pop(skey, None)
+    _MEMORY_STORE[skey] = {"disabled": True}
     _save_store_to_disk()
     asyncio.create_task(upstash_del(skey))

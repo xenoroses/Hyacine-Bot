@@ -121,21 +121,24 @@ class StickyCommands(commands.Cog):
 
     async def _purge_sticky_data(self, channel: discord.TextChannel) -> bool:
         """Purge sticky from store AND delete old message from channel history."""
-        key = f"sticky:{channel.id}"
-        data = await rget_json(self.bot, key)
+        key = f"hyacine:sticky:{channel.id}"
+        legacy_key = f"sticky:{channel.id}"
+        data = await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
         deleted = False
 
-        if data:
+        await rdelete(self.bot, key)
+        await rdelete(self.bot, legacy_key)
+        await rset_json(self.bot, key, {"disabled": True})
+        await rset_json(self.bot, legacy_key, {"disabled": True})
+
+        if data and not data.get("disabled"):
             deleted = True
             last_id = data.get("last_id")
-            await rdelete(self.bot, key)
             if last_id:
                 try:
-                    old_msg = await channel.fetch_message(last_id)
+                    old_msg = await channel.fetch_message(int(last_id))
                     await old_msg.delete()
                 except: pass
-        else:
-            await rdelete(self.bot, key)
 
         # Fallback sweep: remove any orphaned bot messages in channel history
         try:
@@ -174,7 +177,7 @@ class StickyCommands(commands.Cog):
         as_embed: bool = False
     ):
         target_ch = channel or interaction.channel
-        key = f"sticky:{target_ch.id}"
+        key = f"hyacine:sticky:{target_ch.id}"
 
         async with self.channel_locks[target_ch.id]:
             # Sweep channel history for previous sticky messages
@@ -247,7 +250,7 @@ class StickyCommands(commands.Cog):
             is_embed = True
             clean_msg = clean_msg[6:].strip()
 
-        key = f"sticky:{ctx.channel.id}"
+        key = f"hyacine:sticky:{ctx.channel.id}"
         async with self.channel_locks[ctx.channel.id]:
             # Delete author command message
             try:
@@ -300,9 +303,12 @@ class StickyCommands(commands.Cog):
         if "unsticky" in content_lower or "sticky" in content_lower:
             return
 
-        key = f"sticky:{message.channel.id}"
+        key = f"hyacine:sticky:{message.channel.id}"
+        legacy_key = f"sticky:{message.channel.id}"
         data = await rget_json(self.bot, key)
-        if not data: return
+        if not data:
+            data = await rget_json(self.bot, legacy_key)
+        if not data or data.get("disabled"): return
 
         sticky_text = data.get("message")
         is_embed = data.get("is_embed", False)
@@ -312,8 +318,8 @@ class StickyCommands(commands.Cog):
         if last_id and message.channel.last_message_id == int(last_id): return
 
         async with self.channel_locks[message.channel.id]:
-            current_data = await rget_json(self.bot, key)
-            if not current_data: return
+            current_data = await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
+            if not current_data or current_data.get("disabled"): return
 
             current_last_id = current_data.get("last_id")
             sticky_text = current_data.get("message")
