@@ -177,6 +177,17 @@ class StickyCommands(commands.Cog):
         key = f"sticky:{target_ch.id}"
 
         async with self.channel_locks[target_ch.id]:
+            # Sweep channel history for previous sticky messages
+            try:
+                async for past_msg in target_ch.history(limit=15):
+                    if past_msg.author.id == self.bot.user.id:
+                        if past_msg.embeds and any(kw in (past_msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Portal"]):
+                            continue
+                        try:
+                            await past_msg.delete()
+                        except: pass
+            except: pass
+
             # Post initial message
             sent_msg_id = None
             try:
@@ -238,6 +249,23 @@ class StickyCommands(commands.Cog):
 
         key = f"sticky:{ctx.channel.id}"
         async with self.channel_locks[ctx.channel.id]:
+            # Delete author command message
+            try:
+                await ctx.message.delete()
+            except: pass
+
+            # Sweep channel history to remove any existing bot sticky messages
+            try:
+                async for past_msg in ctx.channel.history(limit=15):
+                    if past_msg.author.id == self.bot.user.id:
+                        if past_msg.embeds and any(kw in (past_msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Portal"]):
+                            continue
+                        try:
+                            await past_msg.delete()
+                        except: pass
+            except: pass
+
+            # Post single sticky message at the bottom
             sent_msg_id = None
             try:
                 msg = await self._send_sticky_msg(ctx.channel, clean_msg, is_embed)
@@ -249,12 +277,6 @@ class StickyCommands(commands.Cog):
                 "is_embed": is_embed,
                 "last_id": sent_msg_id
             })
-
-        format_str = " (Rich Embed)" if is_embed else ""
-        try:
-            await ctx.message.delete()
-        except: pass
-        await ctx.send(f"✧ Sticky message protocol engaged{format_str}.", delete_after=4.0)
 
     @commands.command(name="unsticky")
     async def unsticky_prefix(self, ctx: commands.Context):
