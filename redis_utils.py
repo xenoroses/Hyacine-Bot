@@ -160,7 +160,7 @@ async def rget_json(bot, key: str):
         return None
 
 async def rset_json(bot, key: str, value: Any):
-    """Store JSON in RAM, local disk, and Upstash Cloud Redis asynchronously."""
+    """Store JSON in RAM, local disk, and Upstash Cloud Redis synchronously."""
     skey = str(key)
     if isinstance(value, (dict, list)):
         _MEMORY_STORE[skey] = value
@@ -173,7 +173,7 @@ async def rset_json(bot, key: str, value: Any):
             _MEMORY_STORE[skey] = value
             val_str = str(value)
     _save_store_to_disk()
-    asyncio.create_task(upstash_set(skey, val_str))
+    await upstash_set(skey, val_str)
 
 async def rappend(bot, key: str, value: str):
     """Append a value to a list in RAM, local disk, and Upstash Cloud Redis."""
@@ -192,8 +192,8 @@ async def rrange(bot, key: str, start: int = 0, stop: int = -1):
     return [str(x) for x in current[start:stop+1]]
 
 async def rdelete(bot, key: str):
-    """Delete key from RAM, local disk, and Upstash Cloud Redis asynchronously."""
+    """Delete key from RAM, local disk, and Upstash Cloud Redis synchronously."""
     skey = str(key)
     _MEMORY_STORE[skey] = {"disabled": True}
     _save_store_to_disk()
-    asyncio.create_task(upstash_del(skey))
+    await upstash_del(skey)

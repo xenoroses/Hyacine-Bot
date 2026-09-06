@@ -85,7 +85,7 @@ class ConfessionEngine(commands.Cog):
             title="💖 Anonymous Confession Portal",
             description="Click the button below to submit an **anonymous confession**.\n"
                         "Your identity will remain completely hidden from regular server members.",
-            color=0x5865F2
+            color=0xFF69B4
         )
 
         view = ConfessionPanelView(self)
@@ -188,7 +188,7 @@ class ConfessionEngine(commands.Cog):
             title="💖 Anonymous Confession Portal",
             description="Click the button below to submit an **anonymous confession**.\n"
                         "Your identity will remain completely hidden from regular server members.",
-            color=0x5865F2
+            color=0xFF69B4
         )
         view = ConfessionPanelView(self)
 
@@ -207,7 +207,7 @@ class ConfessionEngine(commands.Cog):
             title="💖 Anonymous Confession Portal",
             description="Click the button below to submit an **anonymous confession**.\n"
                         "Your identity will remain completely hidden from regular server members.",
-            color=0x5865F2
+            color=0xFF69B4
         )
         view = ConfessionPanelView(self)
         try:
