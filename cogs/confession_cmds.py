@@ -85,7 +85,7 @@ class ConfessionEngine(commands.Cog):
             title="💖 Anonymous Confession Portal",
             description="Click the button below to submit an **anonymous confession**.\n"
                         "Your identity will remain completely hidden from regular server members.",
-            color=0xFF69B4
+            color=0x5865F2
         )
 
         view = ConfessionPanelView(self)
@@ -127,10 +127,9 @@ class ConfessionEngine(commands.Cog):
                 except: pass
             return
 
-        # 1. Post Anonymous Confession to Public Channel (No Counter / ID)
+        # 1. Post Anonymous Confession to Public Channel (Title-Less Quote Card)
         public_embed = discord.Embed(
-            title="💖 Anonymous Confession",
-            description=content,
+            description=f">>> *“{content}”*",
             color=0xFF69B4
         )
 
@@ -174,18 +173,31 @@ class ConfessionEngine(commands.Cog):
     async def confess_send(self, interaction: discord.Interaction, message: str):
         await self.process_confession(interaction=interaction, user=interaction.user, guild=interaction.guild, content=message.strip())
 
+    @confess.command(name="modal", description="Open multiline confession modal directly.")
+    async def confess_modal(self, interaction: discord.Interaction):
+        modal = ConfessionModal(self)
+        await interaction.response.send_modal(modal)
+
     @confess.command(name="setup", description="Set up designated channel for public anonymous confessions.")
     @app_commands.checks.has_permissions(manage_channels=True)
     async def confess_setup(self, interaction: discord.Interaction, channel: discord.TextChannel, log_channel: Optional[discord.TextChannel] = None):
-        await self._set_guild_config(guild_id=interaction.guild.id, channel_id=channel.id, log_channel_id=log_channel.id if log_channel else None)
-        embed = discord.Embed(
-            title="Confession Engine Configured",
-            description=f"✧ Public confessions channel set to {channel.mention}.\n"
-                        f"• **Admin Audit Logs:** {log_channel.mention if log_channel else '`Not Configured`'}\n"
-                        f"• Use `/confess panel` to send an interactive submission button to the channel.",
-            color=0xFF69B4
+        log_id = log_channel.id if log_channel else None
+        await self._set_guild_config(interaction.guild.id, channel_id=channel.id, log_channel_id=log_id)
+
+        panel_embed = discord.Embed(
+            title="💖 Anonymous Confession Portal",
+            description="Click the button below to submit an **anonymous confession**.\n"
+                        "Your identity will remain completely hidden from regular server members.",
+            color=0x5865F2
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = ConfessionPanelView(self)
+
+        try:
+            await channel.send(embed=panel_embed, view=view)
+            log_msg = f" and log channel to {log_channel.mention}" if log_channel else ""
+            await interaction.response.send_message(f"✨ **Confession channel set to {channel.mention}{log_msg}.**", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed setting up channel: {e}", ephemeral=True)
 
     @confess.command(name="panel", description="Send an interactive 'Submit Confession' button panel to the channel.")
     @app_commands.checks.has_permissions(manage_channels=True)
@@ -195,7 +207,7 @@ class ConfessionEngine(commands.Cog):
             title="💖 Anonymous Confession Portal",
             description="Click the button below to submit an **anonymous confession**.\n"
                         "Your identity will remain completely hidden from regular server members.",
-            color=0xFF69B4
+            color=0x5865F2
         )
         view = ConfessionPanelView(self)
         try:
@@ -229,7 +241,7 @@ class ConfessionEngine(commands.Cog):
                 title="💖 Anonymous Confession Portal",
                 description="Click the button below to submit an **anonymous confession**.\n"
                             "Your identity will remain completely hidden from regular server members.",
-                color=0xFF69B4
+                color=0x5865F2
             )
             view = ConfessionPanelView(self)
             await ctx.channel.send(embed=embed, view=view)
