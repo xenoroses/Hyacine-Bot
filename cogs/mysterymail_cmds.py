@@ -297,11 +297,11 @@ class MysteryMail(commands.Cog):
                 "**Receive anonymous messages from other members and try to figure out who sent them. "
                 "Whether it's a compliment, a confession, a joke, or just someone wanting to make you smile, "
                 "every message is delivered privately by the bot.**\n\n"
-                "✨ **__How it works__**\n\n"
+                "# __How it works__\n\n"
                 "♡ Receive anonymous messages in your DMs.\n"
                 "♡ Decide if you want to guess who sent it.\n"
                 "♡ Keep everyone guessing while staying anonymous.\n\n"
-                "*Sometimes the sweetest messages come from the biggest mysteries. 💋*\n\n"
+                "*Note: Staff can see your identity for moderation purposes.*\n\n"
                 "━━━━━━━ ✦ ━━━━━━━"
             ),
             color=0xFF69B4

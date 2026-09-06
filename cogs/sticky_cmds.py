@@ -55,7 +55,7 @@ class HyacineStickyModal(discord.ui.Modal, title="Set Sticky Notice"):
     async def on_submit(self, interaction: discord.Interaction):
         message_text = self.message_input.value.strip()
         as_embed = self.embed_input.value.strip().lower() in ("yes", "y", "true", "1")
-        key = f"sticky:{self.target_channel.id}"
+        key = f"hyacine:sticky:{self.target_channel.id}"
 
         # Immediately post the initial sticky message into the target channel
         sent_msg_id = None
