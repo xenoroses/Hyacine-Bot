@@ -98,10 +98,25 @@ class StickyCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.channel_locks = defaultdict(asyncio.Lock)
+        self.sticky_cache = {}
         self.prune_trackers.start()
 
     def cog_unload(self):
         self.prune_trackers.cancel()
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Pre-populate RAM cache from stored memory on startup."""
+        try:
+            from redis_utils import _MEMORY_STORE
+            for key, val in list(_MEMORY_STORE.items()):
+                if key.startswith("hyacine:sticky:") or key.startswith("sticky:"):
+                    try:
+                        cid = int(key.split(":")[-1])
+                        if isinstance(val, dict):
+                            self.sticky_cache[cid] = val
+                    except Exception: pass
+        except Exception: pass
 
     @tasks.loop(hours=24)
     async def prune_trackers(self):
@@ -121,6 +136,8 @@ class StickyCommands(commands.Cog):
 
     async def _purge_sticky_data(self, channel: discord.TextChannel) -> bool:
         """Purge sticky from store AND delete old message from channel history."""
+        self.sticky_cache[channel.id] = {"disabled": True}
+
         key = f"hyacine:sticky:{channel.id}"
         legacy_key = f"sticky:{channel.id}"
         data = await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
@@ -130,6 +147,7 @@ class StickyCommands(commands.Cog):
         await rdelete(self.bot, legacy_key)
         await rset_json(self.bot, key, {"disabled": True})
         await rset_json(self.bot, legacy_key, {"disabled": True})
+        self.sticky_cache[channel.id] = {"disabled": True}
 
         if data and not data.get("disabled"):
             deleted = True
@@ -156,6 +174,7 @@ class StickyCommands(commands.Cog):
                     except: pass
         except: pass
 
+        self.sticky_cache[channel.id] = {"disabled": True}
         return deleted
 
     # --- Slash Commands Group ---
@@ -303,13 +322,20 @@ class StickyCommands(commands.Cog):
         if "unsticky" in content_lower or "sticky" in content_lower:
             return
 
+        cid = message.channel.id
+        if cid in self.sticky_cache:
+            cached = self.sticky_cache[cid]
+            if not cached or cached.get("disabled"):
+                return
+
         key = f"hyacine:sticky:{message.channel.id}"
         legacy_key = f"sticky:{message.channel.id}"
-        data = await rget_json(self.bot, key)
-        if not data:
-            data = await rget_json(self.bot, legacy_key)
-        if not data or data.get("disabled"): return
+        data = self.sticky_cache.get(cid) or await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
+        if not data or data.get("disabled"):
+            self.sticky_cache[cid] = {"disabled": True}
+            return
 
+        self.sticky_cache[cid] = data
         sticky_text = data.get("message")
         is_embed = data.get("is_embed", False)
         last_id = data.get("last_id")
@@ -318,9 +344,13 @@ class StickyCommands(commands.Cog):
         if last_id and message.channel.last_message_id == int(last_id): return
 
         async with self.channel_locks[message.channel.id]:
+            if self.sticky_cache.get(cid, {}).get("disabled"): return
             current_data = await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
-            if not current_data or current_data.get("disabled"): return
+            if not current_data or current_data.get("disabled"):
+                self.sticky_cache[cid] = {"disabled": True}
+                return
 
+            self.sticky_cache[cid] = current_data
             current_last_id = current_data.get("last_id")
             sticky_text = current_data.get("message")
             is_embed = current_data.get("is_embed", False)
