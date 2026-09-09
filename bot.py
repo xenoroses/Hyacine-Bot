@@ -119,7 +119,7 @@ class HyacineBot(commands.Bot):
 
         extensions = [
             "cogs.staff_cmds", "cogs.impersonator", "cogs.fun_cmds",
-            "cogs.admin_cmds", "cogs.sticky_cmds", "cogs.forcenick_cmds",
+            "cogs.admin_cmds", "cogs.sticky_cmds",
             "cogs.afk_cmds", "cogs.help_cmds", "cogs.mysterymail_cmds",
             "cogs.confession_cmds", "cogs.infrastructure_engine",
             "cogs.observability_engine", "cogs.autodelete_engine"

@@ -8,7 +8,6 @@ CATEGORY_METADATA = {
     "Fun": {"icon": "❂", "name": "Aether Waves"},
     "Owner": {"icon": "❖", "name": "Sovereign Essence"},
     "Sticky": {"icon": "📌", "name": "Pinned Beacons"},
-    "ForceNick": {"icon": "⌬", "name": "Identity Lock"},
     "AFK": {"icon": "🌙", "name": "Dormancy Protocol"},
     "AIUtility": {"icon": "🤖", "name": "Simulated Intelligence"},
     "Impersonator": {"icon": "🎭", "name": "Identity Shift"},
