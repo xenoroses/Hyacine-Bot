@@ -136,20 +136,23 @@ class StickyCommands(commands.Cog):
 
     async def _purge_sticky_data(self, channel: discord.TextChannel) -> bool:
         """Purge sticky from store AND delete old message from channel history."""
-        self.sticky_cache[channel.id] = {"disabled": True}
+        self.sticky_cache[channel.id] = {"disabled": True, "message": None}
 
         key = f"hyacine:sticky:{channel.id}"
         legacy_key = f"sticky:{channel.id}"
-        data = await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
+        data = self.sticky_cache.get(channel.id) or await rget_json(self.bot, key)
         deleted = False
 
+        disabled_payload = {"disabled": True, "message": None}
+        await rset_json(self.bot, key, disabled_payload)
+        await rset_json(self.bot, legacy_key, disabled_payload)
         await rdelete(self.bot, key)
         await rdelete(self.bot, legacy_key)
-        await rset_json(self.bot, key, {"disabled": True})
-        await rset_json(self.bot, legacy_key, {"disabled": True})
-        self.sticky_cache[channel.id] = {"disabled": True}
+        await rset_json(self.bot, key, disabled_payload)
+        await rset_json(self.bot, legacy_key, disabled_payload)
+        self.sticky_cache[channel.id] = disabled_payload
 
-        if data and not data.get("disabled"):
+        if data and not data.get("disabled") and data.get("message"):
             deleted = True
             last_id = data.get("last_id")
             if last_id:
@@ -174,7 +177,7 @@ class StickyCommands(commands.Cog):
                     except: pass
         except: pass
 
-        self.sticky_cache[channel.id] = {"disabled": True}
+        self.sticky_cache[channel.id] = disabled_payload
         return deleted
 
     # --- Slash Commands Group ---
