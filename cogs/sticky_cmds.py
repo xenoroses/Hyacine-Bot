@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections import defaultdict
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -139,29 +140,44 @@ class StickyCommands(commands.Cog):
         key = f"hyacine:sticky:{channel.id}"
         legacy_key = f"sticky:{channel.id}"
 
-        # 1. Fetch current active data BEFORE disabling cache
-        data = await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
-        deleted = False
+        # 1. Direct check: read last_id from RAM cache or store
+        cached_data = self.sticky_cache.get(channel.id)
+        had_active_config = False
+        target_last_id = None
 
-        # 2. Delete physical sticky message from Discord channel
-        if data and not data.get("disabled") and data.get("last_id"):
-            deleted = True
+        if cached_data and isinstance(cached_data, dict):
+            if not cached_data.get("disabled") and cached_data.get("message"):
+                had_active_config = True
+                target_last_id = cached_data.get("last_id")
+
+        data = await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
+        if data and isinstance(data, dict):
+            if not data.get("disabled") and data.get("message"):
+                had_active_config = True
+                if not target_last_id:
+                    target_last_id = data.get("last_id")
+
+        deleted_physical = False
+
+        # 2. Delete physical sticky message from Discord channel if target_last_id is known
+        if target_last_id:
             try:
-                old_msg = await channel.fetch_message(int(data["last_id"]))
+                old_msg = await channel.fetch_message(int(target_last_id))
                 await old_msg.delete()
+                deleted_physical = True
             except: pass
 
-        # 3. Fallback sweep: remove any orphaned bot messages in channel history
+        # 3. Fallback sweep (up to 30 messages): remove any orphaned bot messages in channel history
         try:
-            async for msg in channel.history(limit=15):
+            async for msg in channel.history(limit=30):
                 if msg.author.id == self.bot.user.id:
-                    if msg.embeds and any(kw in (msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Protocol", "Audit"]):
+                    if msg.embeds and any(kw in (msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Protocol", "Audit", "Portal"]):
                         continue
                     if "protocol engaged" in msg.content.lower():
                         continue
                     try:
                         await msg.delete()
-                        deleted = True
+                        deleted_physical = True
                     except: pass
         except: pass
 
@@ -172,10 +188,8 @@ class StickyCommands(commands.Cog):
         await rset_json(self.bot, legacy_key, disabled_payload)
         await rdelete(self.bot, key)
         await rdelete(self.bot, legacy_key)
-        await rset_json(self.bot, key, disabled_payload)
-        await rset_json(self.bot, legacy_key, disabled_payload)
 
-        return deleted
+        return had_active_config or deleted_physical
 
     # --- Slash Commands Group ---
 
@@ -199,16 +213,7 @@ class StickyCommands(commands.Cog):
         key = f"hyacine:sticky:{target_ch.id}"
 
         async with self.channel_locks[target_ch.id]:
-            # Sweep channel history for previous sticky messages
-            try:
-                async for past_msg in target_ch.history(limit=15):
-                    if past_msg.author.id == self.bot.user.id:
-                        if past_msg.embeds and any(kw in (past_msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Portal"]):
-                            continue
-                        try:
-                            await past_msg.delete()
-                        except: pass
-            except: pass
+            await self._purge_sticky_data(target_ch)
 
             # Post initial message
             sent_msg_id = None
@@ -248,9 +253,23 @@ class StickyCommands(commands.Cog):
         else:
             await safe_respond(interaction, content=f"⚠️ No active sticky message found in {target_ch.mention}.", ephemeral=True)
 
+    @sticky_group.command(name="unsticky", description="Remove sticky message from a channel.")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    async def sticky_unsticky_slash(self, interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
+        """Slash subcommand alias (/sticky unsticky) to remove a sticky message."""
+        await self.sticky_remove_slash(interaction, channel)
+
+    # --- Standalone Slash Command (/unsticky) ---
+
+    @app_commands.command(name="unsticky", description="Remove active sticky message notice from a channel.")
+    @app_commands.checks.has_permissions(manage_channels=True)
+    async def standalone_unsticky_slash(self, interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
+        """Standalone slash command (/unsticky) to remove a sticky message."""
+        await self.sticky_remove_slash(interaction, channel)
+
     # --- Prefix Commands Fallback (!sticky / ,sticky / hya unsticky) ---
 
-    @commands.command(name="sticky")
+    @commands.command(name="sticky", aliases=["setsticky", "addsticky"])
     async def sticky_prefix(self, ctx: commands.Context, *, message: str):
         """Prefix command fallback (!sticky <message> / !sticky -embed <message> / ,sticky <message>)."""
         if not ctx.author.guild_permissions.manage_channels and not ctx.author.guild_permissions.administrator:
@@ -271,23 +290,12 @@ class StickyCommands(commands.Cog):
 
         key = f"hyacine:sticky:{ctx.channel.id}"
         async with self.channel_locks[ctx.channel.id]:
-            # Delete author command message
             try:
                 await ctx.message.delete()
             except: pass
 
-            # Sweep channel history to remove any existing bot sticky messages
-            try:
-                async for past_msg in ctx.channel.history(limit=15):
-                    if past_msg.author.id == self.bot.user.id:
-                        if past_msg.embeds and any(kw in (past_msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Portal"]):
-                            continue
-                        try:
-                            await past_msg.delete()
-                        except: pass
-            except: pass
+            await self._purge_sticky_data(ctx.channel)
 
-            # Post single sticky message at the bottom
             sent_msg_id = None
             try:
                 msg = await self._send_sticky_msg(ctx.channel, clean_msg, is_embed)
@@ -300,7 +308,7 @@ class StickyCommands(commands.Cog):
                 "last_id": sent_msg_id
             })
 
-    @commands.command(name="unsticky")
+    @commands.command(name="unsticky", aliases=["removesticky", "delsticky", "rmsticky", "clearsticky", "nosticky"])
     async def unsticky_prefix(self, ctx: commands.Context):
         """Prefix command fallback (!unsticky / ,unsticky / hya unsticky)."""
         if not ctx.author.guild_permissions.manage_channels and not ctx.author.guild_permissions.administrator:
@@ -311,6 +319,8 @@ class StickyCommands(commands.Cog):
 
         if removed:
             await ctx.send("⌬ Sticky message removed from this channel.", delete_after=4.0)
+        else:
+            await ctx.send("⚠️ No active sticky message found in this channel.", delete_after=4.0)
 
     # --- Event Listener ---
 
@@ -319,7 +329,12 @@ class StickyCommands(commands.Cog):
         if message.author.bot or not message.guild: return
 
         content_lower = message.content.lower().strip()
-        if "unsticky" in content_lower or "sticky" in content_lower:
+        cmd_keywords = (
+            "!sticky", "!unsticky", ",sticky", ",unsticky",
+            "nym sticky", "nym unsticky", "hya sticky", "hya unsticky",
+            "setsticky", "removesticky", "delsticky", "clearsticky", "nosticky"
+        )
+        if content_lower in ("sticky", "unsticky") or any(content_lower.startswith(kw) for kw in cmd_keywords):
             return
 
         cid = message.channel.id
@@ -363,7 +378,7 @@ class StickyCommands(commands.Cog):
 
             # Purge any existing bot sticky messages in recent channel history to guarantee 0 duplicates
             try:
-                async for past_msg in message.channel.history(limit=15):
+                async for past_msg in message.channel.history(limit=30):
                     if past_msg.author.id == self.bot.user.id and past_msg.id != message.id:
                         if past_msg.embeds and any(kw in (past_msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Portal"]):
                             continue
