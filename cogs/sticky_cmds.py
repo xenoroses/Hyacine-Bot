@@ -136,36 +136,25 @@ class StickyCommands(commands.Cog):
 
     async def _purge_sticky_data(self, channel: discord.TextChannel) -> bool:
         """Purge sticky from store AND delete old message from channel history."""
-        self.sticky_cache[channel.id] = {"disabled": True, "message": None}
-
         key = f"hyacine:sticky:{channel.id}"
         legacy_key = f"sticky:{channel.id}"
-        data = self.sticky_cache.get(channel.id) or await rget_json(self.bot, key)
+
+        # 1. Fetch current active data BEFORE disabling cache
+        data = await rget_json(self.bot, key) or await rget_json(self.bot, legacy_key)
         deleted = False
 
-        disabled_payload = {"disabled": True, "message": None}
-        await rset_json(self.bot, key, disabled_payload)
-        await rset_json(self.bot, legacy_key, disabled_payload)
-        await rdelete(self.bot, key)
-        await rdelete(self.bot, legacy_key)
-        await rset_json(self.bot, key, disabled_payload)
-        await rset_json(self.bot, legacy_key, disabled_payload)
-        self.sticky_cache[channel.id] = disabled_payload
-
-        if data and not data.get("disabled") and data.get("message"):
+        # 2. Delete physical sticky message from Discord channel
+        if data and not data.get("disabled") and data.get("last_id"):
             deleted = True
-            last_id = data.get("last_id")
-            if last_id:
-                try:
-                    old_msg = await channel.fetch_message(int(last_id))
-                    await old_msg.delete()
-                except: pass
+            try:
+                old_msg = await channel.fetch_message(int(data["last_id"]))
+                await old_msg.delete()
+            except: pass
 
-        # Fallback sweep: remove any orphaned bot messages in channel history
+        # 3. Fallback sweep: remove any orphaned bot messages in channel history
         try:
             async for msg in channel.history(limit=15):
                 if msg.author.id == self.bot.user.id:
-                    # Ignore command confirmations or system embeds
                     if msg.embeds and any(kw in (msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Protocol", "Audit"]):
                         continue
                     if "protocol engaged" in msg.content.lower():
@@ -173,11 +162,19 @@ class StickyCommands(commands.Cog):
                     try:
                         await msg.delete()
                         deleted = True
-                        break
                     except: pass
         except: pass
 
+        # 4. Permanently assert disabled state in RAM cache and Upstash Cloud Redis
+        disabled_payload = {"disabled": True, "message": None}
         self.sticky_cache[channel.id] = disabled_payload
+        await rset_json(self.bot, key, disabled_payload)
+        await rset_json(self.bot, legacy_key, disabled_payload)
+        await rdelete(self.bot, key)
+        await rdelete(self.bot, legacy_key)
+        await rset_json(self.bot, key, disabled_payload)
+        await rset_json(self.bot, legacy_key, disabled_payload)
+
         return deleted
 
     # --- Slash Commands Group ---
