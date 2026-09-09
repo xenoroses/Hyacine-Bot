@@ -128,8 +128,17 @@ class StickyCommands(commands.Cog):
     async def _send_sticky_msg(self, channel: discord.TextChannel, sticky_text: str, is_embed: bool) -> discord.Message:
         """Post sticky notice formatted as Rich Embed or formatted Markdown text."""
         if is_embed:
+            title = None
+            desc = sticky_text.strip()
+
+            if desc.startswith("# ") or desc.startswith("## "):
+                lines = desc.split("\n", 1)
+                title = lines[0].lstrip("#").strip()
+                desc = lines[1].strip() if len(lines) > 1 else ""
+
             embed = discord.Embed(
-                description=sticky_text,
+                title=title if title else None,
+                description=desc if desc else None,
                 color=0xFF69B4
             )
             return await channel.send(embed=embed)
