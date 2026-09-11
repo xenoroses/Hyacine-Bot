@@ -60,7 +60,35 @@ class ConfessionEngine(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
-        self.bot.add_view(ConfessionPanelView(self))
+        self.config_cache = {}
+        try:
+            self.bot.add_view(ConfessionPanelView(self))
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Pre-populate confession config RAM cache from store on startup."""
+        try:
+            from redis_utils import _MEMORY_STORE
+            # Pass 1: Legacy keys
+            for key, val in list(_MEMORY_STORE.items()):
+                if key.startswith("confession:config:"):
+                    try:
+                        gid = int(key.split(":")[-1])
+                        if isinstance(val, dict):
+                            self.config_cache[gid] = val
+                    except Exception: pass
+
+            # Pass 2: Namespaced hyacine keys
+            for key, val in list(_MEMORY_STORE.items()):
+                if key.startswith("hyacine:confession:config:"):
+                    try:
+                        gid = int(key.split(":")[-1])
+                        if isinstance(val, dict):
+                            self.config_cache[gid] = val
+                    except Exception: pass
+        except Exception: pass
 
     async def refresh_confession_panel(self, channel: discord.TextChannel):
         """Delete the old confession panel and repost it underneath the newest confession."""
@@ -96,14 +124,28 @@ class ConfessionEngine(commands.Cog):
             print(f"Failed reposting confession panel: {e}")
 
     async def _get_guild_config(self, guild_id: int) -> Optional[dict]:
-        return await rget_json(self.bot, f"confession:config:{guild_id}")
+        if guild_id in self.config_cache:
+            cached = self.config_cache[guild_id]
+            if cached and not cached.get("disabled") and cached.get("channel_id"):
+                return cached
+
+        data = await rget_json(self.bot, f"hyacine:confession:config:{guild_id}") or await rget_json(self.bot, f"confession:config:{guild_id}")
+        if data and isinstance(data, dict) and not data.get("disabled"):
+            self.config_cache[guild_id] = data
+            return data
+        return None
 
     async def _set_guild_config(self, guild_id: int, channel_id: Optional[int] = None, log_channel_id: Optional[int] = None) -> dict:
-        key = f"confession:config:{guild_id}"
+        key = f"hyacine:confession:config:{guild_id}"
+        legacy_key = f"confession:config:{guild_id}"
+
         current = await self._get_guild_config(guild_id) or {"channel_id": None, "log_channel_id": None}
         if channel_id is not None: current["channel_id"] = channel_id
         if log_channel_id is not None: current["log_channel_id"] = log_channel_id
+
+        self.config_cache[guild_id] = current
         await rset_json(self.bot, key, current)
+        await rset_json(self.bot, legacy_key, current)
         return current
 
     async def process_confession(self, interaction: Optional[discord.Interaction], user: Union[discord.User, discord.Member], guild: discord.Guild, content: str):

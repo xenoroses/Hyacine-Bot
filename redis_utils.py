@@ -98,7 +98,10 @@ async def rget(bot, key: str, default=None):
     skey = str(key)
     if skey in _MEMORY_STORE and _MEMORY_STORE[skey] is not None:
         val = _MEMORY_STORE[skey]
-        if isinstance(val, (dict, list)): return json.dumps(val)
+        if isinstance(val, dict) and val.get("disabled"):
+            return default
+        if isinstance(val, (dict, list)):
+            return json.dumps(val)
         return str(val)
 
     up_val = await upstash_get(skey)
@@ -108,8 +111,12 @@ async def rget(bot, key: str, default=None):
         return up_val
 
     val = _MEMORY_STORE.get(skey, default)
-    if val is None: return default
-    if isinstance(val, (dict, list)): return json.dumps(val)
+    if val is None:
+        return default
+    if isinstance(val, dict) and val.get("disabled"):
+        return default
+    if isinstance(val, (dict, list)):
+        return json.dumps(val)
     return str(val)
 
 async def rset(bot, key: str, value: Any):
@@ -117,17 +124,39 @@ async def rset(bot, key: str, value: Any):
     skey = str(key)
     val_str = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
     _MEMORY_STORE[skey] = value
+
+    counterpart_key = None
+    if skey.startswith("hyacine:"):
+        counterpart_key = skey.replace("hyacine:", "", 1)
+    elif any(skey.startswith(p) for p in ["sticky:", "confession:config:", "prefixes:"]):
+        counterpart_key = f"hyacine:{skey}"
+
+    if counterpart_key:
+        _MEMORY_STORE[counterpart_key] = value
+
     _save_store_to_disk()
-    asyncio.create_task(upstash_set(skey, val_str))
+
+    try:
+        await upstash_set(skey, val_str)
+        if counterpart_key:
+            await upstash_set(counterpart_key, val_str)
+    except Exception:
+        pass
 
 async def rget_json(bot, key: str):
     """Fast RAM JSON read with Upstash Cloud Redis sync and disk fallback."""
     skey = str(key)
+
     if skey in _MEMORY_STORE and _MEMORY_STORE[skey] is not None:
         data = _MEMORY_STORE[skey]
-        if isinstance(data, (dict, list)): return data
+        if isinstance(data, dict) and data.get("disabled"):
+            return None
+        if isinstance(data, (dict, list)):
+            return data
         try:
             parsed = json.loads(data)
+            if isinstance(parsed, dict) and parsed.get("disabled"):
+                return None
             if isinstance(parsed, str):
                 try: parsed = json.loads(parsed)
                 except: pass
@@ -141,6 +170,10 @@ async def rget_json(bot, key: str):
             if isinstance(parsed, str):
                 try: parsed = json.loads(parsed)
                 except: pass
+            if isinstance(parsed, dict) and parsed.get("disabled"):
+                _MEMORY_STORE[skey] = {"disabled": True}
+                _save_store_to_disk()
+                return None
             _MEMORY_STORE[skey] = parsed
             _save_store_to_disk()
             return parsed
@@ -148,10 +181,16 @@ async def rget_json(bot, key: str):
             pass
 
     data = _MEMORY_STORE.get(skey)
-    if data is None: return None
-    if isinstance(data, (dict, list)): return data
+    if data is None:
+        return None
+    if isinstance(data, dict) and data.get("disabled"):
+        return None
+    if isinstance(data, (dict, list)):
+        return data
     try:
         parsed = json.loads(data)
+        if isinstance(parsed, dict) and parsed.get("disabled"):
+            return None
         if isinstance(parsed, str):
             try: parsed = json.loads(parsed)
             except: pass
@@ -162,19 +201,29 @@ async def rget_json(bot, key: str):
 async def rset_json(bot, key: str, value: Any):
     """Store JSON in RAM, local disk, and Upstash Cloud Redis synchronously with quota resilience."""
     skey = str(key)
-    if isinstance(value, (dict, list)):
-        _MEMORY_STORE[skey] = value
-        val_str = json.dumps(value)
-    else:
-        try:
-            _MEMORY_STORE[skey] = json.loads(value)
-            val_str = value
-        except Exception:
-            _MEMORY_STORE[skey] = value
-            val_str = str(value)
+    parsed_val = value
+    if isinstance(value, str):
+        try: parsed_val = json.loads(value)
+        except Exception: pass
+
+    val_str = json.dumps(parsed_val) if isinstance(parsed_val, (dict, list)) else str(parsed_val)
+    _MEMORY_STORE[skey] = parsed_val
+
+    counterpart_key = None
+    if skey.startswith("hyacine:"):
+        counterpart_key = skey.replace("hyacine:", "", 1)
+    elif any(skey.startswith(p) for p in ["sticky:", "confession:config:", "prefixes:"]):
+        counterpart_key = f"hyacine:{skey}"
+
+    if counterpart_key:
+        _MEMORY_STORE[counterpart_key] = parsed_val
+
     _save_store_to_disk()
+
     try:
         await upstash_set(skey, val_str)
+        if counterpart_key:
+            await upstash_set(counterpart_key, val_str)
     except Exception:
         pass
 
@@ -195,11 +244,23 @@ async def rrange(bot, key: str, start: int = 0, stop: int = -1):
     return [str(x) for x in current[start:stop+1]]
 
 async def rdelete(bot, key: str):
-    """Delete key from RAM, local disk, and Upstash Cloud Redis synchronously with quota resilience."""
+    """Delete key permanently from RAM, local disk, and Upstash Cloud Redis with quota resilience."""
     skey = str(key)
-    _MEMORY_STORE[skey] = {"disabled": True}
+    keys_to_purge = [skey]
+    if skey.startswith("hyacine:"):
+        keys_to_purge.append(skey.replace("hyacine:", "", 1))
+    else:
+        keys_to_purge.append(f"hyacine:{skey}")
+
+    disabled_payload = {"disabled": True, "message": None}
+    for k in keys_to_purge:
+        _MEMORY_STORE[k] = disabled_payload
+
     _save_store_to_disk()
-    try:
-        await upstash_del(skey)
-    except Exception:
-        pass
+
+    for k in keys_to_purge:
+        try:
+            await upstash_set(k, json.dumps(disabled_payload))
+            await upstash_del(k)
+        except Exception:
+            pass

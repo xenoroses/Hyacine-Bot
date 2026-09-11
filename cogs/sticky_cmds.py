@@ -107,17 +107,28 @@ class StickyCommands(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Pre-populate RAM cache from stored memory on startup."""
+        """Pre-populate RAM cache from stored memory on startup to shield Upstash Redis quota."""
         try:
             from redis_utils import _MEMORY_STORE
+            # Pass 1: Load legacy keys
             for key, val in list(_MEMORY_STORE.items()):
-                if key.startswith("hyacine:sticky:") or key.startswith("sticky:"):
+                if key.startswith("sticky:"):
                     try:
                         cid = int(key.split(":")[-1])
                         if isinstance(val, dict):
                             self.sticky_cache[cid] = val
                     except Exception: pass
-        except Exception: pass
+
+            # Pass 2: Load namespaced hyacine keys (overwrites legacy if present)
+            for key, val in list(_MEMORY_STORE.items()):
+                if key.startswith("hyacine:sticky:"):
+                    try:
+                        cid = int(key.split(":")[-1])
+                        if isinstance(val, dict):
+                            self.sticky_cache[cid] = val
+                    except Exception: pass
+        except Exception as e:
+            logging.warning(f"Failed pre-populating sticky RAM cache: {e}")
 
     @tasks.loop(hours=24)
     async def prune_trackers(self):
