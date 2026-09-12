@@ -138,8 +138,28 @@ class HyacineBot(commands.Bot):
             except Exception as e:
                 logging.error(f"Global app command sync notice: {e}")
 
+import socket
+_SINGLE_INSTANCE_SOCKET = None
+
+def acquire_single_instance_lock(port: int = 18998) -> bool:
+    global _SINGLE_INSTANCE_SOCKET
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", port))
+        s.listen(1)
+        _SINGLE_INSTANCE_SOCKET = s
+        logging.info(f"Single-instance lock successfully acquired on port {port}.")
+        return True
+    except Exception as e:
+        logging.warning(f"Single-instance lock check for port {port}: {e}. Preventing duplicate bot worker startup.")
+        return False
+
 # --- 5. STARTUP ---
 async def main():
+    if not acquire_single_instance_lock(18998):
+        logging.warning("Duplicate Hyacine Bot startup prevented cleanly.")
+        return
+
     load_dotenv()
     token = os.getenv("dc_token") or os.getenv("DISCORD_TOKEN") or os.getenv("BOT_TOKEN")
 
