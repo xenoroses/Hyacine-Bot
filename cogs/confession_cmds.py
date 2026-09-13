@@ -102,7 +102,7 @@ class ConfessionEngine(commands.Cog):
 
                 embed = message.embeds[0]
 
-                if embed.title in ("💖 Anonymous Confession Portal", "🌸 Anonymous Confession Portal"):
+                if embed.title and "Anonymous Confession Portal" in embed.title:
                     await message.delete()
                     break
 
