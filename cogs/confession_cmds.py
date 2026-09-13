@@ -90,24 +90,35 @@ class ConfessionEngine(commands.Cog):
                     except Exception: pass
         except Exception: pass
 
-    async def refresh_confession_panel(self, channel: discord.TextChannel):
-        """Delete the old confession panel and repost it underneath the newest confession."""
+    async def purge_legacy_messages(self, channel: discord.TextChannel) -> int:
+        """Purge all legacy confession cards, flower panels, and old portal panels from channel history."""
+        deleted_count = 0
         try:
-            async for message in channel.history(limit=100):
-                if message.author.id != self.bot.user.id:
-                    continue
+            async for msg in channel.history(limit=100):
+                if msg.author.id == self.bot.user.id:
+                    should_delete = False
+                    if msg.embeds:
+                        emb = msg.embeds[0]
+                        if emb.title and any(k in emb.title.lower() for k in ["confession #", "confession portal", "anonymous confession"]):
+                            should_delete = True
+                        elif emb.description and any(k in emb.description.lower() for k in ["submit an anonymous confession", "type /confess"]):
+                            should_delete = True
+                        elif emb.footer and emb.footer.text and "type /confess" in emb.footer.text.lower():
+                            should_delete = True
 
-                if not message.embeds:
-                    continue
-
-                embed = message.embeds[0]
-
-                if embed.title and "Anonymous Confession Portal" in embed.title:
-                    await message.delete()
-                    break
-
+                    if should_delete:
+                        try:
+                            await msg.delete()
+                            deleted_count += 1
+                        except Exception:
+                            pass
         except Exception as e:
-            print(f"Failed deleting old confession panel: {e}")
+            print(f"Error purging legacy confession messages: {e}")
+        return deleted_count
+
+    async def refresh_confession_panel(self, channel: discord.TextChannel):
+        """Delete ALL old confession panel messages and repost a single canonical panel underneath the newest confession."""
+        await self.purge_legacy_messages(channel)
 
         panel_embed = discord.Embed(
             title="💖 Anonymous Confession Portal",
@@ -225,17 +236,8 @@ class ConfessionEngine(commands.Cog):
     async def confess_setup(self, interaction: discord.Interaction, channel: discord.TextChannel, log_channel: Optional[discord.TextChannel] = None):
         log_id = log_channel.id if log_channel else None
         await self._set_guild_config(interaction.guild.id, channel_id=channel.id, log_channel_id=log_id)
-
-        panel_embed = discord.Embed(
-            title="💖 Anonymous Confession Portal",
-            description="Click the button below to submit an **anonymous confession**.\n"
-                        "Your identity will remain completely hidden from regular server members.",
-            color=0xFF69B4
-        )
-        view = ConfessionPanelView(self)
-
         try:
-            await channel.send(embed=panel_embed, view=view)
+            await self.refresh_confession_panel(channel)
             log_msg = f" and log channel to {log_channel.mention}" if log_channel else ""
             await interaction.response.send_message(f"✨ **Confession channel set to {channel.mention}{log_msg}.**", ephemeral=True)
         except Exception as e:
@@ -245,15 +247,8 @@ class ConfessionEngine(commands.Cog):
     @app_commands.checks.has_permissions(manage_channels=True)
     async def confess_panel(self, interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
         target_ch = channel or interaction.channel
-        embed = discord.Embed(
-            title="💖 Anonymous Confession Portal",
-            description="Click the button below to submit an **anonymous confession**.\n"
-                        "Your identity will remain completely hidden from regular server members.",
-            color=0xFF69B4
-        )
-        view = ConfessionPanelView(self)
         try:
-            await target_ch.send(embed=embed, view=view)
+            await self.refresh_confession_panel(target_ch)
             await interaction.response.send_message(f"✅ Interactive confession panel posted to {target_ch.mention}.", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"❌ Failed posting panel to {target_ch.mention}: {e}", ephemeral=True)
