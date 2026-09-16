@@ -290,7 +290,8 @@ class MysteryMail(commands.Cog):
 
     @app_commands.command(name="mysterymail", description="Display the interactive Mystery Mail panel.")
     @app_commands.checks.has_permissions(manage_guild=True)
-    async def mysterymail_cmd(self, interaction: discord.Interaction):
+    async def mysterymail_cmd(self, interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
+        target_ch = channel or interaction.channel
         embed = discord.Embed(
             description=(
                 "*Ever wondered who's been thinking about you?*\n\n"
@@ -309,13 +310,18 @@ class MysteryMail(commands.Cog):
 
         view = MysteryMailPanelView()
 
-        if os.path.exists(HYACINE_BANNER_PATH):
-            file = discord.File(HYACINE_BANNER_PATH, filename="banner.png")
-            embed.set_image(url="attachment://banner.png")
-            await interaction.response.send_message(embed=embed, file=file, view=view)
-        else:
-            embed.set_image(url=HYACINE_BANNER_CDN)
-            await interaction.response.send_message(embed=embed, view=view)
+        try:
+            if os.path.exists(HYACINE_BANNER_PATH):
+                file = discord.File(HYACINE_BANNER_PATH, filename="banner.png")
+                embed.set_image(url="attachment://banner.png")
+                await target_ch.send(embed=embed, file=file, view=view)
+            else:
+                embed.set_image(url=HYACINE_BANNER_CDN)
+                await target_ch.send(embed=embed, view=view)
+
+            await interaction.response.send_message(f"✨ **Interactive Mystery Mail panel posted to {target_ch.mention}.**", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed posting panel to {target_ch.mention}: {e}", ephemeral=True)
 
     @app_commands.command(name="mysterymaillog", description="Set the audit log channel for Mystery Mail anti-abuse oversight.")
     @app_commands.checks.has_permissions(manage_guild=True)
