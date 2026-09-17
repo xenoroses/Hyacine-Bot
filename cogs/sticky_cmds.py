@@ -187,19 +187,35 @@ class StickyCommands(commands.Cog):
                 deleted_physical = True
             except: pass
 
-        # 3. Fallback sweep (up to 30 messages): remove any orphaned bot messages in channel history
-        try:
-            async for msg in channel.history(limit=30):
-                if msg.author.id == self.bot.user.id:
-                    if msg.embeds and any(kw in (msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Protocol", "Audit", "Portal"]):
-                        continue
-                    if "protocol engaged" in msg.content.lower():
-                        continue
-                    try:
-                        await msg.delete()
-                        deleted_physical = True
-                    except: pass
-        except: pass
+        # 3. Targeted fallback sweep (up to 20 messages): only remove orphaned messages that MATCH this sticky
+        if target_sticky_text:
+            try:
+                clean_target = target_sticky_text.strip()
+                async for msg in channel.history(limit=20):
+                    if msg.author.id == self.bot.user.id:
+                        is_match = False
+                        if target_last_id and msg.id == int(target_last_id):
+                            is_match = True
+                        elif msg.embeds:
+                            emb = msg.embeds[0]
+                            # NEVER delete confessions or portal panels
+                            if emb.description and "“" in emb.description and "”" in emb.description:
+                                continue
+                            if emb.title and any(k in emb.title.lower() for k in ["confession", "portal", "configured", "removed"]):
+                                continue
+                            if emb.description and clean_target in emb.description:
+                                is_match = True
+                            elif emb.title and clean_target.startswith("#") and emb.title in clean_target:
+                                is_match = True
+                        elif msg.content and clean_target in msg.content:
+                            is_match = True
+
+                        if is_match:
+                            try:
+                                await msg.delete()
+                                deleted_physical = True
+                            except: pass
+            except: pass
 
         # 4. Permanently assert disabled state in RAM cache and Upstash Cloud Redis
         disabled_payload = {"disabled": True, "message": None}
@@ -396,22 +412,24 @@ class StickyCommands(commands.Cog):
             if current_last_id and message.channel.last_message_id == int(current_last_id):
                 return
 
-            # Purge any existing bot sticky messages in recent channel history to guarantee 0 duplicates
-            try:
-                async for past_msg in message.channel.history(limit=30):
-                    if past_msg.author.id == self.bot.user.id and past_msg.id != message.id:
-                        if past_msg.embeds and any(kw in (past_msg.embeds[0].title or "") for kw in ["Configured", "Removed", "Portal"]):
-                            continue
-                        try:
-                            await past_msg.delete()
-                        except: pass
-            except: pass
+            # 1. Fast O(1) delete of previous sticky notice
+            if current_last_id:
+                try:
+                    old_msg = await message.channel.fetch_message(int(current_last_id))
+                    await old_msg.delete()
+                except (discord.NotFound, discord.HTTPException):
+                    pass
+                except Exception:
+                    pass
 
+            # 2. Repost sticky notice at bottom of channel
             try:
                 new_msg = await self._send_sticky_msg(message.channel, sticky_text, is_embed)
                 current_data["last_id"] = new_msg.id
+                self.sticky_cache[cid] = current_data
                 await rset_json(self.bot, key, current_data)
-            except: pass
+            except Exception as e:
+                logging.error(f"Failed reposting sticky notice in channel {message.channel.id}: {e}")
 
 async def setup(bot):
     if "StickyCommands" not in bot.cogs:
